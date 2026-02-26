@@ -6,7 +6,6 @@ authors = [
     { name = "Siobhan Rossi", email = "siobhan@fastmail.org" }
 ]
 dependencies = [
-    "mcp>=1.9.4",
     "anki>=25.2.7",
     "aqt>=25.2.7",
 ]

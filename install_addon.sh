@@ -1,62 +1,41 @@
 #!/bin/bash
+set -euo pipefail
+
 # Script to install AnkiMCP as a local Anki addon
 
-# Find Anki's addon directory
-if [ -d "$HOME/.local/share/Anki2/addons21" ]; then
-    # Linux
-    ADDON_DIR="$HOME/.local/share/Anki2/addons21"
-elif [ -d "$HOME/Library/Application Support/Anki2/addons21" ]; then
-    # macOS
-    ADDON_DIR="$HOME/Library/Application Support/Anki2/addons21"
-elif [ -d "$APPDATA/Anki2/addons21" ]; then
-    # Windows (in WSL/Git Bash)
-    ADDON_DIR="$APPDATA/Anki2/addons21"
-else
-    echo "Error: Could not find Anki addons directory"
-    echo "Please ensure Anki is installed"
-    exit 1
-fi
+# --- Single-responsibility functions ---
 
-# Create addon directory
-ANKIMCP_DIR="$ADDON_DIR/ankimcp"
-echo "Installing AnkiMCP to: $ANKIMCP_DIR"
-
-# Remove old installation if exists
-if [ -d "$ANKIMCP_DIR" ]; then
-    echo "Removing existing installation..."
-    rm -rf "$ANKIMCP_DIR"
-fi
-
-# Create directory
-mkdir -p "$ANKIMCP_DIR"
-
-# Copy addon files
-echo "Copying addon files..."
-cp -r src/ankimcp/* "$ANKIMCP_DIR/"
-
-# Install vendored runtime dependencies
-PYTHON_BIN="$(command -v python3 || command -v python)"
-if [ -z "$PYTHON_BIN" ]; then
-    echo "Error: Python interpreter not found. Please install Python 3.10+."
-    exit 1
-fi
-
-if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-    echo "pip not found; attempting to bootstrap with ensurepip..."
-    if ! "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1; then
-        echo "Error: pip is required to install dependencies."
-        exit 1
+find_addon_dir() {
+    if [ -d "$HOME/.local/share/Anki2/addons21" ]; then
+        echo "$HOME/.local/share/Anki2/addons21"
+    elif [ -d "$HOME/Library/Application Support/Anki2/addons21" ]; then
+        echo "$HOME/Library/Application Support/Anki2/addons21"
+    elif [ -n "${APPDATA:-}" ] && [ -d "$APPDATA/Anki2/addons21" ]; then
+        echo "$APPDATA/Anki2/addons21"
+    else
+        echo "Error: Could not find Anki addons directory" >&2
+        echo "Please ensure Anki is installed" >&2
+        return 1
     fi
-fi
+}
 
-echo "Installing runtime dependencies into $ANKIMCP_DIR/vendor..."
-if ! "$PYTHON_BIN" -m pip install --upgrade --target "$ANKIMCP_DIR/vendor" "mcp>=1.9.4"; then
-    echo "Error: Failed to install runtime dependencies."
-    exit 1
-fi
+prepare_addon_dir() {
+    local addon_dir="$1"
 
-# Create meta.json for Anki
-cat > "$ANKIMCP_DIR/meta.json" << EOF
+    if [ -d "$addon_dir" ]; then
+        echo "Removing existing installation..."
+        rm -rf "$addon_dir"
+    fi
+
+    mkdir -p "$addon_dir"
+    echo "Copying addon files..."
+    cp -r src/ankimcp/* "$addon_dir/"
+}
+
+write_meta_json() {
+    local addon_dir="$1"
+
+    cat > "$addon_dir/meta.json" << EOF
 {
     "name": "AnkiMCP",
     "mod": $(date +%s),
@@ -66,13 +45,30 @@ cat > "$ANKIMCP_DIR/meta.json" << EOF
     }
 }
 EOF
+}
 
-echo "Installation complete!"
-echo ""
-echo "Next steps:"
-echo "1. Restart Anki"
-echo "2. The MCP server will start automatically when you open your profile"
-echo "3. Configure your AI assistant to connect to localhost:4473"
-echo ""
-echo "To configure the addon in Anki:"
-echo "Tools → Add-ons → AnkiMCP → Config"
+# --- Entrypoint ---
+
+main() {
+    local addon_base addon_dir
+
+    addon_base="$(find_addon_dir)"
+    addon_dir="$addon_base/ankimcp"
+
+    echo "Installing AnkiMCP to: $addon_dir"
+    prepare_addon_dir "$addon_dir"
+    write_meta_json "$addon_dir"
+
+    echo ""
+    echo "Installation complete!"
+    echo ""
+    echo "Next steps:"
+    echo "1. Restart Anki"
+    echo "2. The MCP server will start automatically when you open your profile"
+    echo "3. Configure your AI assistant to connect to localhost:4473"
+    echo ""
+    echo "To configure the addon in Anki:"
+    echo "Tools → Add-ons → AnkiMCP → Config"
+}
+
+main "$@"

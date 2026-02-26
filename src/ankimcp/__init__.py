@@ -2,8 +2,6 @@
 
 import logging
 import os
-import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Optional
@@ -12,24 +10,8 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global server process
-server_process: Optional[subprocess.Popen] = None
+# Global server thread
 server_thread: Optional[threading.Thread] = None
-
-
-def _add_vendor_site_packages():
-    """Add vendored dependencies (e.g., mcp) to sys.path when packaged for Anki."""
-    addon_dir = Path(__file__).parent
-    vendor_dir = addon_dir / "vendor"
-
-    if vendor_dir.exists():
-        vendor_path = str(vendor_dir)
-        if vendor_path not in sys.path:
-            sys.path.insert(0, vendor_path)
-            logger.debug(f"Added vendor path to sys.path: {vendor_path}")
-
-
-_add_vendor_site_packages()
 
 
 def start_mcp_server():
