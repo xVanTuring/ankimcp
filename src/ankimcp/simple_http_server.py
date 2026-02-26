@@ -17,7 +17,7 @@ from threading import Lock, Thread
 from typing import Any, Dict, Optional
 
 from .anki_interface import AnkiInterface
-from .tools import AVAILABLE_TOOLS
+from .tools import AVAILABLE_TOOLS, ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -523,86 +523,20 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         if not tool_name:
             raise JSONRPCError(INVALID_PARAMS, "Missing 'name' parameter")
 
-        # Get the Anki interface from the server
         anki: Optional[AnkiInterface] = getattr(self.server, "anki_interface", None)
         if not anki:
             raise JSONRPCError(INTERNAL_ERROR, "Anki interface not initialized")
 
-        try:
-            result = self._execute_tool(anki, tool_name, arguments)
-            return {
-                "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
-                "isError": False,
-            }
-        except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {e}")
-            return {
-                "content": [{"type": "text", "text": f"Error: {str(e)}"}],
-                "isError": True,
-            }
+        executor = ToolExecutor(anki)
+        results = asyncio.run(executor.execute(tool_name, arguments))
 
-    def _execute_tool(
-        self, anki: AnkiInterface, tool_name: str, arguments: Dict[str, Any]
-    ) -> Any:
-        """Execute a tool and return the result."""
-        tool_handlers = {
-            "get_permissions": lambda: anki.permissions.get_permission_summary(),
-            "list_decks": lambda: asyncio.run(anki.list_decks()),
-            "get_deck_info": lambda: asyncio.run(
-                anki.get_deck_info(arguments["deck_name"])
-            ),
-            "search_notes": lambda: asyncio.run(
-                anki.search_notes(arguments["query"], limit=arguments.get("limit", 50))
-            ),
-            "get_note": lambda: asyncio.run(anki.get_note(arguments["note_id"])),
-            "get_cards_for_note": lambda: asyncio.run(
-                anki.get_cards_for_note(arguments["note_id"])
-            ),
-            "get_review_stats": lambda: asyncio.run(
-                anki.get_review_stats(arguments.get("deck_name"))
-            ),
-            "list_note_types": lambda: asyncio.run(anki.list_note_types()),
-            "create_deck": lambda: asyncio.run(
-                anki.create_deck(arguments["deck_name"])
-            ),
-            "create_note_type": lambda: asyncio.run(
-                anki.create_note_type(
-                    arguments["name"], arguments["fields"], arguments["templates"]
-                )
-            ),
-            "create_note": lambda: asyncio.run(
-                anki.create_note(
-                    arguments["model_name"],
-                    arguments["fields"],
-                    arguments["deck_name"],
-                    tags=arguments.get("tags"),
-                )
-            ),
-            "update_note": lambda: asyncio.run(
-                anki.update_note(
-                    arguments["note_id"],
-                    fields=arguments.get("fields"),
-                    tags=arguments.get("tags"),
-                )
-            ),
-            "delete_note": lambda: asyncio.run(anki.delete_note(arguments["note_id"])),
-            "delete_deck": lambda: asyncio.run(
-                anki.delete_deck(arguments["deck_name"])
-            ),
-            "update_deck": lambda: asyncio.run(
-                anki.update_deck(
-                    arguments["deck_name"],
-                    arguments.get("new_name"),
-                    arguments.get("description"),
-                )
-            ),
+        content = [{"type": "text", "text": r.text} for r in results]
+        is_error = any(r.is_error for r in results)
+
+        return {
+            "content": content,
+            "isError": is_error,
         }
-
-        handler = tool_handlers.get(tool_name)
-        if handler is None:
-            raise JSONRPCError(INVALID_PARAMS, f"Unknown tool: {tool_name}")
-
-        return handler()
 
     def _send_json_response(self, status_code: int, data: Any) -> None:
         """Send a JSON response."""

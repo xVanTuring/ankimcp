@@ -1,6 +1,32 @@
 """Tool definitions for AnkiMCP."""
 
-from mcp.types import Tool
+import asyncio
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Dict, List
+
+if TYPE_CHECKING:
+    from .anki_interface import AnkiInterface
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Tool:
+    """Lightweight replacement for mcp.types.Tool to avoid pydantic_core dependency."""
+
+    name: str
+    description: str
+    inputSchema: Dict[str, Any]
+
+
+@dataclass
+class ToolResult:
+    """Result of a tool execution. Lightweight replacement for mcp.types.TextContent."""
+
+    text: str
+    is_error: bool = False
+
 
 # Define all available tools in one place
 AVAILABLE_TOOLS = [
@@ -250,3 +276,73 @@ def get_tool_schemas():
         }
         for tool in AVAILABLE_TOOLS
     ]
+
+
+class ToolExecutor:
+    """Executes MCP tools against an AnkiInterface.
+
+    Single responsibility: dispatch tool calls and return ToolResult.
+    Depends on AnkiInterface abstraction, not on any transport layer.
+    """
+
+    def __init__(self, anki: "AnkiInterface") -> None:
+        self.anki = anki
+
+    async def execute(self, name: str, arguments: Dict[str, Any]) -> List[ToolResult]:
+        """Execute a named tool with given arguments."""
+        try:
+            result = await self._dispatch(name, arguments)
+            return [ToolResult(text=str(result))]
+        except Exception as e:
+            logger.error(f"Error executing tool {name}: {e}")
+            return [ToolResult(text=f"Error: {str(e)}", is_error=True)]
+
+    async def _dispatch(self, name: str, arguments: Dict[str, Any]) -> Any:
+        """Route tool name to the appropriate AnkiInterface method."""
+        handlers: Dict[str, Any] = {
+            "get_permissions": lambda: self.anki.permissions.get_permission_summary(),
+            "list_decks": lambda: self.anki.list_decks(),
+            "get_deck_info": lambda: self.anki.get_deck_info(arguments["deck_name"]),
+            "search_notes": lambda: self.anki.search_notes(
+                arguments["query"], limit=arguments.get("limit", 50)
+            ),
+            "get_note": lambda: self.anki.get_note(arguments["note_id"]),
+            "get_cards_for_note": lambda: self.anki.get_cards_for_note(
+                arguments["note_id"]
+            ),
+            "get_review_stats": lambda: self.anki.get_review_stats(
+                arguments.get("deck_name")
+            ),
+            "list_note_types": lambda: self.anki.list_note_types(),
+            "create_deck": lambda: self.anki.create_deck(arguments["deck_name"]),
+            "create_note_type": lambda: self.anki.create_note_type(
+                arguments["name"], arguments["fields"], arguments["templates"]
+            ),
+            "create_note": lambda: self.anki.create_note(
+                arguments["model_name"],
+                arguments["fields"],
+                arguments["deck_name"],
+                tags=arguments.get("tags"),
+            ),
+            "update_note": lambda: self.anki.update_note(
+                arguments["note_id"],
+                fields=arguments.get("fields"),
+                tags=arguments.get("tags"),
+            ),
+            "delete_note": lambda: self.anki.delete_note(arguments["note_id"]),
+            "delete_deck": lambda: self.anki.delete_deck(arguments["deck_name"]),
+            "update_deck": lambda: self.anki.update_deck(
+                arguments["deck_name"],
+                arguments.get("new_name"),
+                arguments.get("description"),
+            ),
+        }
+
+        handler = handlers.get(name)
+        if handler is None:
+            raise ValueError(f"Unknown tool: {name}")
+
+        result = handler()
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
