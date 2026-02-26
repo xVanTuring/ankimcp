@@ -1,20 +1,13 @@
-"""Tests for the MCP server."""
+"""Tests for the MCP tool definitions."""
 
-import pytest
-
-from ankimcp.server import list_tools
+from ankimcp.tools import AVAILABLE_TOOLS
 
 
-@pytest.mark.asyncio
-async def test_list_tools():
-    """Test that list_tools returns expected tools."""
-    tools = await list_tools()
+def test_list_tools():
+    """Test that AVAILABLE_TOOLS contains expected tools."""
+    assert len(AVAILABLE_TOOLS) == 15
 
-    # Check we have the expected number of tools
-    assert len(tools) == 15
-
-    # Check tool names
-    tool_names = {tool.name for tool in tools}
+    tool_names = {tool.name for tool in AVAILABLE_TOOLS}
     expected_names = {
         "get_permissions",
         "list_decks",
@@ -34,8 +27,7 @@ async def test_list_tools():
     }
     assert tool_names == expected_names
 
-    # Check each tool has required fields
-    for tool in tools:
+    for tool in AVAILABLE_TOOLS:
         assert tool.name
         assert tool.description
         assert tool.inputSchema
