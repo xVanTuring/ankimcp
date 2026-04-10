@@ -260,30 +260,43 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             sse_sessions.send_message(session_id, response)
 
             # Also send HTTP 202 Accepted
-            self.send_response(202)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "accepted"}')
+            try:
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status": "accepted"}')
+            except BrokenPipeError:
+                # Client disconnected before we could send response
+                pass
 
         except JSONRPCError as e:
             response = JSONRPCHandler.error_response(
                 request_id, e.code, e.message, e.data
             )
             sse_sessions.send_message(session_id, response)
-            self.send_response(202)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "accepted"}')
+            try:
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status": "accepted"}')
+            except BrokenPipeError:
+                pass
+        except BrokenPipeError:
+            # Client closed connection - just log at debug level
+            logger.debug("Client disconnected during message handling")
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             response = JSONRPCHandler.error_response(
                 request_id, INTERNAL_ERROR, f"Internal error: {str(e)}"
             )
             sse_sessions.send_message(session_id, response)
-            self.send_response(202)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "accepted"}')
+            try:
+                self.send_response(202)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status": "accepted"}')
+            except BrokenPipeError:
+                logger.debug("Client disconnected while sending error response")
 
     def _handle_mcp_post(self):
         """Handle direct POST to /mcp (stateless JSON-RPC)."""
@@ -568,6 +581,9 @@ class ThreadedHTTPServer(HTTPServer):
         """Process request in thread."""
         try:
             self.finish_request(request, client_address)
+        except (ConnectionResetError, BrokenPipeError):
+            # Client closed connection before response was sent - normal behavior
+            pass
         except Exception:
             self.handle_error(request, client_address)
         finally:
