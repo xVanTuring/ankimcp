@@ -449,3 +449,12 @@ class AnkiInterface:
             "updated": True,
             "updated_fields": updated_fields,
         }
+
+    async def sync(self) -> Dict[str, Any]:
+        """Sync Anki collection with AnkiWeb."""
+        if mw is not None:
+            mw.taskman.run_on_main(lambda mw=mw: mw.on_sync_button_clicked())
+        return {
+            "synced": True,
+            "message": "Collection sync unsupported",
+        }

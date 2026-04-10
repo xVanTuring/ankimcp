@@ -263,6 +263,11 @@ AVAILABLE_TOOLS = [
             "required": ["deck_name"],
         },
     ),
+    Tool(
+        name="sync",
+        description="Sync Anki collection with AnkiWeb",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
 ]
 
 
@@ -336,6 +341,7 @@ class ToolExecutor:
                 arguments.get("new_name"),
                 arguments.get("description"),
             ),
+            "sync": lambda: self.anki.sync(),
         }
 
         handler = handlers.get(name)
