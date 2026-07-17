@@ -36,6 +36,20 @@ class MockAnkiInterface(AnkiInterface):
                 "card_count": 1,
             }
         }
+        self.cards = {
+            1: {
+                "cid": 1,
+                "nid": 1,
+                "deck": "Spanish",
+                "type": 2,
+                "queue": 2,
+                "ivl": 30,
+                "due": 100,
+                "reps": 5,
+                "lapses": 1,
+                "factor": 2500,
+            }
+        }
         self.models = {
             "Basic": {
                 "id": 1,
@@ -99,6 +113,59 @@ class MockAnkiInterface(AnkiInterface):
                         results.append(note)
                         break
         return results[:limit]
+
+    async def search_card_states(
+        self,
+        query: str,
+        fields: Optional[list] = None,
+        limit: int = 0,
+        strip_html: bool = True,
+    ):
+        from ankimcp.anki_interface import _card_state, _plain_text
+
+        note_ids = {note["id"] for note in await self.search_notes(query)}
+        selected_cards = [c for c in self.cards.values() if c["nid"] in note_ids]
+        matched = len(selected_cards)
+        if limit > 0:
+            selected_cards = selected_cards[:limit]
+
+        cards = []
+        for card in selected_cards:
+            if not self._is_readable(card["deck"]):
+                continue
+
+            entry = {
+                "cid": card["cid"],
+                "nid": card["nid"],
+                "deck": card["deck"],
+                "state": _card_state(card["type"], card["ivl"]),
+                "ivl": card["ivl"],
+                "due": card["due"],
+                "reps": card["reps"],
+                "lapses": card["lapses"],
+                "factor": card["factor"],
+            }
+            if card["queue"] == -1:
+                entry["suspended"] = True
+            if card["queue"] in (-2, -3):
+                entry["buried"] = True
+
+            if fields:
+                note_fields = self.notes[card["nid"]]["fields"]
+                entry["fields"] = {
+                    name: _plain_text(note_fields[name]) if strip_html else note_fields[name]
+                    for name in fields
+                    if name in note_fields
+                }
+
+            cards.append(entry)
+
+        return {
+            "count": len(cards),
+            "matched": matched,
+            "truncated": limit > 0 and matched > limit,
+            "cards": cards,
+        }
 
     async def get_note(self, note_id: int):
         if note_id in self.notes:

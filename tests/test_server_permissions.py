@@ -1,5 +1,7 @@
 """Integration tests for tool execution with permissions."""
 
+import json
+
 import pytest
 
 from ankimcp.permissions import PermissionManager
@@ -49,8 +51,11 @@ class TestServerPermissions:
         text = result[0].text
         assert "allowlist" in text
         assert "Spanish" in text
-        assert "read': True" in text
-        assert "write': False" in text
+        assert json.loads(text)["global_permissions"] == {
+            "read": True,
+            "write": False,
+            "delete": False,
+        }
 
     @pytest.mark.asyncio
     async def test_list_decks_filtered(self, restricted_anki):

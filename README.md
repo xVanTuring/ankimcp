@@ -70,6 +70,7 @@ Once installed, the MCP server runs automatically when Anki is open. You can the
 - `list_decks` - List all available Anki decks
 - `get_deck_info` - Get detailed information about a specific deck
 - `search_notes` - Search for notes using Anki's search syntax
+- `search_card_states` - Search cards, returning their scheduling state (new/learning/relearning/young/mature) plus only the note fields you ask for, with HTML stripped. Prefer this over `search_notes` for bulk export.
 - `get_note` - Get detailed information about a specific note
 - `get_cards_for_note` - Get all cards associated with a note
 - `get_review_stats` - Get review statistics for a deck or overall

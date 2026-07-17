@@ -5,7 +5,7 @@ from ankimcp.tools import AVAILABLE_TOOLS
 
 def test_list_tools():
     """Test that AVAILABLE_TOOLS contains expected tools."""
-    assert len(AVAILABLE_TOOLS) == 15
+    assert len(AVAILABLE_TOOLS) == 17
 
     tool_names = {tool.name for tool in AVAILABLE_TOOLS}
     expected_names = {
@@ -13,6 +13,7 @@ def test_list_tools():
         "list_decks",
         "get_deck_info",
         "search_notes",
+        "search_card_states",
         "get_note",
         "get_cards_for_note",
         "get_review_stats",
@@ -24,6 +25,7 @@ def test_list_tools():
         "delete_note",
         "delete_deck",
         "update_deck",
+        "sync",
     }
     assert tool_names == expected_names
 

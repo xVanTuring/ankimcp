@@ -1,6 +1,7 @@
 """Tool definitions for AnkiMCP."""
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List
@@ -9,6 +10,15 @@ if TYPE_CHECKING:
     from .anki_interface import AnkiInterface
 
 logger = logging.getLogger(__name__)
+
+
+def _to_json(result: Any) -> str:
+    """Serialize a tool result as JSON so clients can parse it.
+
+    ensure_ascii is off to keep non-Latin fields readable and compact; default=str
+    covers the odd Anki object that is not JSON-native.
+    """
+    return json.dumps(result, ensure_ascii=False, default=str)
 
 
 @dataclass
@@ -68,6 +78,43 @@ AVAILABLE_TOOLS = [
                     "type": "integer",
                     "description": "Maximum number of results",
                     "default": 50,
+                },
+            },
+            "required": ["query"],
+        },
+    ),
+    Tool(
+        name="search_card_states",
+        description=(
+            "Search cards and return their scheduling state (new/learning/relearning/"
+            "young/mature) plus only the note fields you ask for, with HTML stripped. "
+            "Unlike search_notes this never returns whole notes, so it is the right "
+            "tool for bulk-exporting the study state of a large deck."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Anki search query, e.g. 'deck:Spanish -is:new'",
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Note field names to include, e.g. ['Front']. "
+                        "Omit for state only. Names not on the note are skipped."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of cards; 0 means no limit",
+                    "default": 0,
+                },
+                "strip_html": {
+                    "type": "boolean",
+                    "description": "Strip HTML markup from returned field values",
+                    "default": True,
                 },
             },
             "required": ["query"],
@@ -297,7 +344,7 @@ class ToolExecutor:
         """Execute a named tool with given arguments."""
         try:
             result = await self._dispatch(name, arguments)
-            return [ToolResult(text=str(result))]
+            return [ToolResult(text=_to_json(result))]
         except Exception as e:
             logger.error(f"Error executing tool {name}: {e}")
             return [ToolResult(text=f"Error: {str(e)}", is_error=True)]
@@ -310,6 +357,12 @@ class ToolExecutor:
             "get_deck_info": lambda: self.anki.get_deck_info(arguments["deck_name"]),
             "search_notes": lambda: self.anki.search_notes(
                 arguments["query"], limit=arguments.get("limit", 50)
+            ),
+            "search_card_states": lambda: self.anki.search_card_states(
+                arguments["query"],
+                fields=arguments.get("fields"),
+                limit=arguments.get("limit", 0),
+                strip_html=arguments.get("strip_html", True),
             ),
             "get_note": lambda: self.anki.get_note(arguments["note_id"]),
             "get_cards_for_note": lambda: self.anki.get_cards_for_note(

@@ -104,7 +104,8 @@ The addon follows a layered architecture:
 **Read operations:**
 - `list_decks`: Returns all decks with card counts
 - `get_deck_info`: Detailed deck statistics
-- `search_notes`: Search using Anki's query syntax
+- `search_notes`: Search using Anki's query syntax (returns *whole* notes — expensive on rich note types)
+- `search_card_states`: Search cards, returning scheduling state + only the requested fields, HTML stripped. Use this for bulk export; `search_notes` on a few thousand rich notes is tens of MB.
 - `get_note`: Full note data with fields
 - `get_cards_for_note`: All cards for a specific note
 - `get_review_stats`: Review statistics for deck or collection
@@ -132,6 +133,7 @@ To install in Anki:
 - HTTP server with SSE transport runs on port 4473 (configurable)
 - Threaded server handles concurrent SSE connections
 - MCP clients connect directly via SSE endpoint (`/sse`)
+- Tool results are serialized with `json.dumps` (`ensure_ascii=False`), so clients can parse them directly. Error results stay as plain `Error: ...` text.
 - Gracefully handles Anki availability (addon vs standalone)
 - Configuration via Anki's addon config system
 - Comprehensive permission system for access control

@@ -1,8 +1,10 @@
 """Interface for accessing Anki data."""
 
+import html
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from .permissions import PermissionAction, PermissionManager
+from .permissions import PermissionAction, PermissionError, PermissionManager
 
 try:
     # When running as an Anki addon
@@ -21,6 +23,42 @@ except ImportError:
         Note = Any
         Card = Any
         NoteId = int  # type: ignore
+
+
+# Mirrors Anki's own strip_html: tags are removed without inserting whitespace,
+# so markup used inside a word (e.g. "con<b></b>sole") collapses back to "console".
+_RE_COMMENT = re.compile(r"(?s)<!--.*?-->")
+_RE_STYLE = re.compile(r"(?si)<style.*?>.*?</style>")
+_RE_SCRIPT = re.compile(r"(?si)<script.*?>.*?</script>")
+_RE_TAG = re.compile(r"(?s)<.*?>")
+_RE_WHITESPACE = re.compile(r"\s+")
+
+# Anki's mature threshold: cards with an interval of 21+ days are "mature".
+MATURE_IVL_DAYS = 21
+
+QUEUE_SUSPENDED = -1
+QUEUE_BURIED = (-2, -3)
+
+
+def _plain_text(value: str) -> str:
+    """Strip HTML markup from a field value and collapse whitespace."""
+    text = _RE_COMMENT.sub("", value)
+    text = _RE_STYLE.sub("", text)
+    text = _RE_SCRIPT.sub("", text)
+    text = _RE_TAG.sub("", text)
+    text = html.unescape(text)
+    return _RE_WHITESPACE.sub(" ", text).strip()
+
+
+def _card_state(card_type: int, ivl: int) -> str:
+    """Map Anki's card type + interval onto a single learning-state label."""
+    if card_type == 0:
+        return "new"
+    if card_type == 1:
+        return "learning"
+    if card_type == 3:
+        return "relearning"
+    return "mature" if ivl >= MATURE_IVL_DAYS else "young"
 
 
 class AnkiInterface:
@@ -117,6 +155,96 @@ class AnkiInterface:
             notes.append(await self._note_to_dict(note))
 
         return notes
+
+    async def search_card_states(
+        self,
+        query: str,
+        fields: Optional[List[str]] = None,
+        limit: int = 0,
+        strip_html: bool = True,
+    ) -> Dict[str, Any]:
+        """Search cards, returning scheduling state plus only the requested fields.
+
+        Unlike search_notes, this never returns whole notes, so it stays small
+        enough to bulk-export a deck of thousands of cards.
+        """
+        card_ids = self.col.find_cards(query)
+        matched = len(card_ids)
+        if limit > 0:
+            card_ids = card_ids[:limit]
+
+        wanted = list(fields or [])
+        deck_names: Dict[int, str] = {}
+        deck_readable: Dict[int, bool] = {}
+        note_fields: Dict[int, Dict[str, str]] = {}
+        cards: List[Dict[str, Any]] = []
+
+        for cid in card_ids:
+            card = self.col.get_card(cid)
+
+            if card.did not in deck_names:
+                deck_names[card.did] = self.col.decks.name(card.did)
+                deck_readable[card.did] = self._is_readable(deck_names[card.did])
+            if not deck_readable[card.did]:
+                continue
+
+            entry: Dict[str, Any] = {
+                "cid": card.id,
+                "nid": card.nid,
+                "deck": deck_names[card.did],
+                "state": _card_state(card.type, card.ivl),
+                "ivl": card.ivl,
+                "due": card.due,
+                "reps": card.reps,
+                "lapses": card.lapses,
+                "factor": card.factor,
+            }
+            if card.queue == QUEUE_SUSPENDED:
+                entry["suspended"] = True
+            if card.queue in QUEUE_BURIED:
+                entry["buried"] = True
+
+            if wanted:
+                if card.nid not in note_fields:
+                    note = self.col.get_note(card.nid)  # type: ignore
+                    note_fields[card.nid] = self._select_fields(
+                        note, wanted, strip_html
+                    )
+                entry["fields"] = note_fields[card.nid]
+
+            cards.append(entry)
+
+        return {
+            "count": len(cards),
+            "matched": matched,
+            "truncated": limit > 0 and matched > limit,
+            "cards": cards,
+        }
+
+    def _is_readable(self, deck_name: str) -> bool:
+        """Whether the deck may be read, without raising."""
+        try:
+            self.permissions.check_deck_permission(deck_name, PermissionAction.READ)
+            return True
+        except PermissionError:
+            return False
+
+    @staticmethod
+    def _select_fields(
+        note: "Note", wanted: List[str], strip_html: bool
+    ) -> Dict[str, str]:
+        """Pull just the named fields off a note. Unknown names are skipped."""
+        model = note.note_type()
+        if not model:
+            return {}
+
+        names = [f["name"] for f in model["flds"]]
+        selected = {}
+        for name in wanted:
+            if name in names:
+                value = note.fields[names.index(name)]
+                selected[name] = _plain_text(value) if strip_html else value
+        return selected
 
     async def get_note(self, note_id: int) -> Dict[str, Any]:
         """Get detailed information about a specific note."""

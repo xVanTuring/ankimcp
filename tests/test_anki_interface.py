@@ -2,6 +2,7 @@
 
 import pytest
 
+from ankimcp.anki_interface import _card_state, _plain_text
 from tests.test_utils import MockAnkiInterface
 
 
@@ -39,6 +40,68 @@ async def test_search_notes(mock_anki):
     notes = await mock_anki.search_notes("tag:spanish")
     assert len(notes) == 1
     assert notes[0]["fields"]["Front"] == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_search_card_states(mock_anki):
+    """Test the compact card-state search."""
+    result = await mock_anki.search_card_states("tag:spanish", fields=["Front"])
+
+    assert result["count"] == 1
+    assert result["matched"] == 1
+    assert result["truncated"] is False
+
+    card = result["cards"][0]
+    assert card["state"] == "mature"  # ivl 30 >= 21
+    assert card["ivl"] == 30
+    assert card["deck"] == "Spanish"
+    assert card["fields"] == {"Front": "Hello"}
+
+
+@pytest.mark.asyncio
+async def test_search_card_states_omits_fields_by_default(mock_anki):
+    """Fields are only returned when explicitly requested."""
+    result = await mock_anki.search_card_states("tag:spanish")
+    assert "fields" not in result["cards"][0]
+
+
+@pytest.mark.asyncio
+async def test_search_card_states_skips_unknown_fields(mock_anki):
+    """Unknown field names are skipped rather than raising."""
+    result = await mock_anki.search_card_states(
+        "tag:spanish", fields=["Front", "NotAField"]
+    )
+    assert result["cards"][0]["fields"] == {"Front": "Hello"}
+
+
+@pytest.mark.asyncio
+async def test_search_card_states_truncates(mock_anki):
+    """A limit smaller than the match count reports truncation."""
+    mock_anki.cards[2] = dict(mock_anki.cards[1], cid=2)
+
+    result = await mock_anki.search_card_states("tag:spanish", limit=1)
+    assert result["count"] == 1
+    assert result["matched"] == 2
+    assert result["truncated"] is True
+
+
+def test_card_state_mapping():
+    """Card type + interval map onto the expected state labels."""
+    assert _card_state(0, 0) == "new"
+    assert _card_state(1, 0) == "learning"
+    assert _card_state(3, 5) == "relearning"
+    assert _card_state(2, 20) == "young"
+    assert _card_state(2, 21) == "mature"
+
+
+def test_plain_text_strips_markup():
+    """HTML is stripped the way Anki does it: no whitespace inserted."""
+    assert _plain_text("con<b></b>sole") == "console"
+    assert _plain_text("<div>a</div>") == "a"
+    assert _plain_text("<!-- note -->hi") == "hi"
+    assert _plain_text("<style>.x{color:red}</style>word") == "word"
+    assert _plain_text("a&nbsp;&amp;&nbsp;b") == "a & b"
+    assert _plain_text("  spaced   out  ") == "spaced out"
 
 
 @pytest.mark.asyncio
