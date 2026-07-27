@@ -224,38 +224,122 @@ async def test_create_note(mock_anki):
 
 @pytest.mark.asyncio
 async def test_update_note(mock_anki):
-    """Test updating an existing note."""
-    # Get an existing note
+    """Updating a note returns a minimal confirmation by default."""
     note = await mock_anki.get_note(1)
     original_tags = note["tags"]
 
-    # Update fields only
-    updated_fields = {"Front": "Hi", "Back": "Hola (updated)"}
-    result = await mock_anki.update_note(1, fields=updated_fields)
+    # Default response is a minimal confirmation
+    result = await mock_anki.update_note(
+        1, fields={"Front": "Hi", "Back": "Hola (updated)"}
+    )
+    assert result == {
+        "note_id": 1,
+        "updated_fields": ["Front", "Back"],
+        "tags_updated": False,
+        "success": True,
+    }
 
-    assert result["id"] == 1
-    assert result["fields"]["Front"] == "Hi"
-    assert result["fields"]["Back"] == "Hola (updated)"
-    assert result["tags"] == original_tags  # Tags should remain unchanged
+    # The fields were actually updated; tags untouched
+    note = await mock_anki.get_note(1)
+    assert note["fields"]["Front"] == "Hi"
+    assert note["fields"]["Back"] == "Hola (updated)"
+    assert note["tags"] == original_tags
 
-    # Update tags only
+    # return_fields reads back only the requested fields
+    result = await mock_anki.update_note(
+        1, fields={"Front": "Hello again"}, return_fields=["Front"]
+    )
+    assert result["fields"] == {"Front": "Hello again"}
+    assert result["updated_fields"] == ["Front"]
+
+    # "*" reads back all fields
+    result = await mock_anki.update_note(1, fields={"Front": "Hi"}, return_fields=["*"])
+    assert result["fields"] == {"Front": "Hi", "Back": "Hola (updated)"}
+
+    # Tag updates are confirmed inline
     new_tags = ["spanish", "greetings", "updated"]
     result = await mock_anki.update_note(1, tags=new_tags)
-
+    assert result["tags_updated"] is True
     assert result["tags"] == new_tags
-    assert result["fields"]["Front"] == "Hi"  # Previous field update should persist
-
-    # Update both fields and tags
-    result = await mock_anki.update_note(
-        1, fields={"Front": "Hello again"}, tags=["spanish", "basic"]
-    )
-
-    assert result["fields"]["Front"] == "Hello again"
-    assert result["tags"] == ["spanish", "basic"]
+    assert result["updated_fields"] == []
 
     # Test updating non-existent note
     with pytest.raises(ValueError, match="Note not found"):
         await mock_anki.update_note(999, fields={"Front": "Test"})
+
+
+@pytest.mark.asyncio
+async def test_update_notes(mock_anki):
+    """Batch update applies each item independently and reports failures."""
+    result = await mock_anki.update_notes(
+        [
+            {"note_id": 1, "fields": {"Front": "Batch"}, "tags": ["spanish"]},
+            {"note_id": 999, "fields": {"Front": "Nope"}},
+            {"fields": {"Front": "Missing id"}},
+        ]
+    )
+
+    assert result["count"] == 3
+    assert result["succeeded"] == 1
+    assert result["failed"] == 2
+
+    first = result["results"][0]
+    assert first["success"] is True
+    assert first["note_id"] == 1
+    assert first["updated_fields"] == ["Front"]
+
+    assert result["results"][1]["success"] is False
+    assert result["results"][1]["note_id"] == 999
+    assert "error" in result["results"][1]
+
+    assert result["results"][2]["success"] is False
+    assert result["results"][2]["note_id"] is None
+
+    # The successful update was applied
+    note = await mock_anki.get_note(1)
+    assert note["fields"]["Front"] == "Batch"
+
+    # return_fields applies to each result
+    result = await mock_anki.update_notes(
+        [{"note_id": 1, "fields": {"Back": "Adiós"}}], return_fields=["Back"]
+    )
+    assert result["results"][0]["fields"] == {"Back": "Adiós"}
+
+    # strip_html applies to returned field values
+    result = await mock_anki.update_notes(
+        [{"note_id": 1, "fields": {"Back": "<b>Adiós</b>"}}],
+        return_fields=["Back"],
+        strip_html=True,
+    )
+    assert result["results"][0]["fields"] == {"Back": "Adiós"}
+
+    # Raw values are returned by default
+    result = await mock_anki.update_note(
+        1, fields={"Back": "<b>Adiós</b>"}, return_fields=["Back"]
+    )
+    assert result["fields"] == {"Back": "<b>Adiós</b>"}
+
+
+@pytest.mark.asyncio
+async def test_search_card_states_by_note(mock_anki):
+    """by_note merges cards that share a note into one entry."""
+    mock_anki.cards[2] = dict(mock_anki.cards[1], cid=2, ivl=5)
+
+    result = await mock_anki.search_card_states(
+        "tag:spanish", fields=["Front"], by_note=True
+    )
+
+    assert result["count"] == 1  # one note, not two cards
+    assert result["matched"] == 2
+    assert "cards" not in result
+
+    note = result["notes"][0]
+    assert note["nid"] == 1
+    assert note["fields"] == {"Front": "Hello"}  # fields hoisted to the note
+    assert len(note["cards"]) == 2
+    assert all("nid" not in card for card in note["cards"])
+    assert note["cards"][0]["state"] == "mature"
+    assert note["cards"][1]["state"] == "young"
 
 
 @pytest.mark.asyncio

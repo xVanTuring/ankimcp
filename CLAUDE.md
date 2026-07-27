@@ -105,7 +105,7 @@ The addon follows a layered architecture:
 - `list_decks`: Returns all decks with card counts
 - `get_deck_info`: Detailed deck statistics
 - `search_notes`: Search using Anki's query syntax (returns *whole* notes — expensive on rich note types)
-- `search_card_states`: Search cards, returning scheduling state + only the requested fields, HTML stripped. Use this for bulk export; `search_notes` on a few thousand rich notes is tens of MB.
+- `search_card_states`: Search cards, returning scheduling state + only the requested fields, HTML stripped. Use this for bulk export; `search_notes` on a few thousand rich notes is tens of MB. Pass `by_note: true` to merge cards that share a note into one entry per note.
 - `get_note`: Full note data with fields
 - `get_cards_for_note`: All cards for a specific note
 - `get_review_stats`: Review statistics for deck or collection
@@ -116,7 +116,8 @@ The addon follows a layered architecture:
 - `create_deck`: Create a new deck
 - `create_note_type`: Create a new note type
 - `create_note`: Create a new note
-- `update_note`: Update note fields or tags
+- `update_note`: Update note fields or tags. Returns a minimal confirmation by default; pass `return_fields` (e.g. `["Front"]`, or `["*"]` for all) to read fields back — avoids echoing whole notes with long HTML fields. Returned values are raw unless `strip_html: true`.
+- `update_notes`: Batch version of `update_note` — one call applies a list of `{note_id, fields?, tags?}` updates; per-note failures are reported in the results list without aborting the batch.
 - `update_deck`: Update deck name or description
 - `delete_note`: Delete a note and its cards
 - `delete_deck`: Delete a deck and its cards

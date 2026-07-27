@@ -61,6 +61,23 @@ def _card_state(card_type: int, ivl: int) -> str:
     return "mature" if ivl >= MATURE_IVL_DAYS else "young"
 
 
+def _group_by_note(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Merge card entries that share a nid into one entry per note.
+
+    Requested note fields move onto the note entry; per-card scheduling
+    state stays in the nested "cards" list (without the duplicated nid).
+    """
+    notes: Dict[int, Dict[str, Any]] = {}
+    for card in cards:
+        note = notes.setdefault(card["nid"], {"nid": card["nid"], "cards": []})
+        if "fields" in card and "fields" not in note:
+            note["fields"] = card["fields"]
+        note["cards"].append(
+            {key: value for key, value in card.items() if key not in ("nid", "fields")}
+        )
+    return list(notes.values())
+
+
 class AnkiInterface:
     """Interface for accessing Anki collection data."""
 
@@ -162,11 +179,13 @@ class AnkiInterface:
         fields: Optional[List[str]] = None,
         limit: int = 0,
         strip_html: bool = True,
+        by_note: bool = False,
     ) -> Dict[str, Any]:
         """Search cards, returning scheduling state plus only the requested fields.
 
         Unlike search_notes, this never returns whole notes, so it stays small
-        enough to bulk-export a deck of thousands of cards.
+        enough to bulk-export a deck of thousands of cards. With by_note=True,
+        cards that share a note are merged into one entry per note.
         """
         card_ids = self.col.find_cards(query)
         matched = len(card_ids)
@@ -213,6 +232,15 @@ class AnkiInterface:
                 entry["fields"] = note_fields[card.nid]
 
             cards.append(entry)
+
+        if by_note:
+            notes = _group_by_note(cards)
+            return {
+                "count": len(notes),
+                "matched": matched,
+                "truncated": limit > 0 and matched > limit,
+                "notes": notes,
+            }
 
         return {
             "count": len(cards),
@@ -455,8 +483,15 @@ class AnkiInterface:
         note_id: int,
         fields: Optional[Dict[str, str]] = None,
         tags: Optional[List[str]] = None,
+        return_fields: Optional[List[str]] = None,
+        strip_html: bool = False,
     ) -> Dict[str, Any]:
-        """Update an existing note."""
+        """Update an existing note.
+
+        Returns a minimal confirmation by default; pass return_fields to read
+        back specific fields after the update (["*"] returns all fields).
+        Returned field values are raw (with HTML) unless strip_html is set.
+        """
         note = self.col.get_note(NoteId(note_id))
 
         # Check current note's tags for permissions
@@ -467,6 +502,7 @@ class AnkiInterface:
             self.permissions.check_tag_permission(tags, PermissionAction.WRITE)
 
         # Update fields
+        updated_fields: List[str] = []
         if fields:
             model = note.note_type()
             if model:
@@ -474,6 +510,7 @@ class AnkiInterface:
                     field_name = field["name"]
                     if field_name in fields:
                         note[field_name] = fields[field_name]
+                        updated_fields.append(field_name)
 
         # Update tags
         if tags is not None:
@@ -482,7 +519,70 @@ class AnkiInterface:
         # Save changes
         self.col.update_note(note)
 
-        return await self._note_to_dict(note)
+        result: Dict[str, Any] = {
+            "note_id": note_id,
+            "updated_fields": updated_fields,
+            "tags_updated": tags is not None,
+            "success": True,
+        }
+        if tags is not None:
+            result["tags"] = note.tags
+        if return_fields:
+            model = note.note_type()
+            names = [f["name"] for f in model["flds"]] if model else []
+            wanted = (
+                names
+                if "*" in return_fields
+                else [n for n in return_fields if n in names]
+            )
+            result["fields"] = {
+                n: (
+                    _plain_text(note.fields[names.index(n)])
+                    if strip_html
+                    else note.fields[names.index(n)]
+                )
+                for n in wanted
+            }
+        return result
+
+    async def update_notes(
+        self,
+        updates: List[Dict[str, Any]],
+        return_fields: Optional[List[str]] = None,
+        strip_html: bool = False,
+    ) -> Dict[str, Any]:
+        """Update multiple notes in one call.
+
+        Each item is {"note_id": int, "fields"?: {...}, "tags"?: [...]}.
+        A failure on one note does not abort the rest; per-note errors are
+        reported in the results list.
+        """
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+
+        for item in updates:
+            note_id = item.get("note_id")
+            try:
+                if note_id is None:
+                    raise ValueError("Missing note_id")
+                result = await self.update_note(
+                    note_id,
+                    fields=item.get("fields"),
+                    tags=item.get("tags"),
+                    return_fields=return_fields,
+                    strip_html=strip_html,
+                )
+                succeeded += 1
+                results.append(result)
+            except Exception as e:
+                results.append({"note_id": note_id, "success": False, "error": str(e)})
+
+        return {
+            "count": len(results),
+            "succeeded": succeeded,
+            "failed": len(results) - succeeded,
+            "results": results,
+        }
 
     async def delete_note(self, note_id: int) -> Dict[str, Any]:
         """Delete a note and all its cards."""

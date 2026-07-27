@@ -116,6 +116,15 @@ AVAILABLE_TOOLS = [
                     "description": "Strip HTML markup from returned field values",
                     "default": True,
                 },
+                "by_note": {
+                    "type": "boolean",
+                    "description": (
+                        "Merge cards that share a note into one entry per note "
+                        "(returns 'notes' instead of 'cards'). Useful when note "
+                        "types have multiple card templates."
+                    ),
+                    "default": False,
+                },
             },
             "required": ["query"],
         },
@@ -239,7 +248,10 @@ AVAILABLE_TOOLS = [
     ),
     Tool(
         name="update_note",
-        description="Update an existing note",
+        description=(
+            "Update an existing note. Returns a minimal confirmation by default; "
+            "use return_fields to read back specific fields after the update."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -256,8 +268,73 @@ AVAILABLE_TOOLS = [
                     "items": {"type": "string"},
                     "description": "New list of tags (replaces existing tags)",
                 },
+                "return_fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Field names to include in the response, e.g. ['Front']. "
+                        "Omit for a minimal confirmation; ['*'] returns all fields."
+                    ),
+                },
+                "strip_html": {
+                    "type": "boolean",
+                    "description": (
+                        "Strip HTML markup from returned field values "
+                        "(only applies with return_fields)"
+                    ),
+                    "default": False,
+                },
             },
             "required": ["note_id"],
+        },
+    ),
+    Tool(
+        name="update_notes",
+        description=(
+            "Update multiple notes in one call. Each update is applied "
+            "independently: per-note failures are reported in the results list "
+            "without aborting the rest of the batch."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "note_id": {"type": "integer"},
+                            "fields": {"type": "object"},
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["note_id"],
+                    },
+                    "description": (
+                        "List of updates, each {note_id, fields?, tags?} — "
+                        "same semantics as update_note."
+                    ),
+                },
+                "return_fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Field names to include in each result, e.g. ['Front']. "
+                        "Omit for minimal confirmations; ['*'] returns all fields."
+                    ),
+                },
+                "strip_html": {
+                    "type": "boolean",
+                    "description": (
+                        "Strip HTML markup from returned field values "
+                        "(only applies with return_fields)"
+                    ),
+                    "default": False,
+                },
+            },
+            "required": ["updates"],
         },
     ),
     Tool(
@@ -363,6 +440,7 @@ class ToolExecutor:
                 fields=arguments.get("fields"),
                 limit=arguments.get("limit", 0),
                 strip_html=arguments.get("strip_html", True),
+                by_note=arguments.get("by_note", False),
             ),
             "get_note": lambda: self.anki.get_note(arguments["note_id"]),
             "get_cards_for_note": lambda: self.anki.get_cards_for_note(
@@ -386,6 +464,13 @@ class ToolExecutor:
                 arguments["note_id"],
                 fields=arguments.get("fields"),
                 tags=arguments.get("tags"),
+                return_fields=arguments.get("return_fields"),
+                strip_html=arguments.get("strip_html", False),
+            ),
+            "update_notes": lambda: self.anki.update_notes(
+                arguments["updates"],
+                return_fields=arguments.get("return_fields"),
+                strip_html=arguments.get("strip_html", False),
             ),
             "delete_note": lambda: self.anki.delete_note(arguments["note_id"]),
             "delete_deck": lambda: self.anki.delete_deck(arguments["deck_name"]),

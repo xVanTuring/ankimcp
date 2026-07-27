@@ -120,8 +120,9 @@ class MockAnkiInterface(AnkiInterface):
         fields: Optional[list] = None,
         limit: int = 0,
         strip_html: bool = True,
+        by_note: bool = False,
     ):
-        from ankimcp.anki_interface import _card_state, _plain_text
+        from ankimcp.anki_interface import _card_state, _group_by_note, _plain_text
 
         note_ids = {note["id"] for note in await self.search_notes(query)}
         selected_cards = [c for c in self.cards.values() if c["nid"] in note_ids]
@@ -153,12 +154,25 @@ class MockAnkiInterface(AnkiInterface):
             if fields:
                 note_fields = self.notes[card["nid"]]["fields"]
                 entry["fields"] = {
-                    name: _plain_text(note_fields[name]) if strip_html else note_fields[name]
+                    name: (
+                        _plain_text(note_fields[name])
+                        if strip_html
+                        else note_fields[name]
+                    )
                     for name in fields
                     if name in note_fields
                 }
 
             cards.append(entry)
+
+        if by_note:
+            notes = _group_by_note(cards)
+            return {
+                "count": len(notes),
+                "matched": matched,
+                "truncated": limit > 0 and matched > limit,
+                "notes": notes,
+            }
 
         return {
             "count": len(cards),
@@ -308,7 +322,12 @@ class MockAnkiInterface(AnkiInterface):
         return new_note.copy()
 
     async def update_note(
-        self, note_id: int, fields: Optional[dict] = None, tags: Optional[list] = None
+        self,
+        note_id: int,
+        fields: Optional[dict] = None,
+        tags: Optional[list] = None,
+        return_fields: Optional[list] = None,
+        strip_html: bool = False,
     ):
         if note_id not in self.notes:
             raise ValueError(f"Note not found: {note_id}")
@@ -331,14 +350,68 @@ class MockAnkiInterface(AnkiInterface):
             self.permissions.check_tag_permission(tags, PermissionAction.WRITE)
 
         # Update fields
+        updated_fields = []
         if fields:
             note["fields"].update(fields)
+            updated_fields = list(fields.keys())
 
         # Update tags
         if tags is not None:
             note["tags"] = tags
 
-        return note.copy()
+        result = {
+            "note_id": note_id,
+            "updated_fields": updated_fields,
+            "tags_updated": tags is not None,
+            "success": True,
+        }
+        if tags is not None:
+            result["tags"] = list(note["tags"])
+        if return_fields:
+            from ankimcp.anki_interface import _plain_text
+
+            if "*" in return_fields:
+                wanted = list(note["fields"].keys())
+            else:
+                wanted = [n for n in return_fields if n in note["fields"]]
+            result["fields"] = {
+                n: _plain_text(note["fields"][n]) if strip_html else note["fields"][n]
+                for n in wanted
+            }
+        return result
+
+    async def update_notes(
+        self,
+        updates: list,
+        return_fields: Optional[list] = None,
+        strip_html: bool = False,
+    ):
+        results = []
+        succeeded = 0
+
+        for item in updates:
+            note_id = item.get("note_id")
+            try:
+                if note_id is None:
+                    raise ValueError("Missing note_id")
+                result = await self.update_note(
+                    note_id,
+                    fields=item.get("fields"),
+                    tags=item.get("tags"),
+                    return_fields=return_fields,
+                    strip_html=strip_html,
+                )
+                succeeded += 1
+                results.append(result)
+            except Exception as e:
+                results.append({"note_id": note_id, "success": False, "error": str(e)})
+
+        return {
+            "count": len(results),
+            "succeeded": succeeded,
+            "failed": len(results) - succeeded,
+            "results": results,
+        }
 
     async def delete_note(self, note_id: int):
         if note_id not in self.notes:

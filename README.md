@@ -1,5 +1,8 @@
 # AnkiMCP
 
+This is a fork of [ankimcp](https://github.com/shivros/ankimcp) with some fixes and modifications.
+---
+
 [![CI](https://github.com/matt-fff/ankimcp/actions/workflows/ci.yml/badge.svg)](https://github.com/matt-fff/ankimcp/actions/workflows/ci.yml)
 [![Test Matrix](https://github.com/matt-fff/ankimcp/actions/workflows/test-matrix.yml/badge.svg)](https://github.com/matt-fff/ankimcp/actions/workflows/test-matrix.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -70,7 +73,7 @@ Once installed, the MCP server runs automatically when Anki is open. You can the
 - `list_decks` - List all available Anki decks
 - `get_deck_info` - Get detailed information about a specific deck
 - `search_notes` - Search for notes using Anki's search syntax
-- `search_card_states` - Search cards, returning their scheduling state (new/learning/relearning/young/mature) plus only the note fields you ask for, with HTML stripped. Prefer this over `search_notes` for bulk export.
+- `search_card_states` - Search cards, returning their scheduling state (new/learning/relearning/young/mature) plus only the note fields you ask for, with HTML stripped. Prefer this over `search_notes` for bulk export. Pass `by_note: true` to merge cards that share a note into one entry per note.
 - `get_note` - Get detailed information about a specific note
 - `get_cards_for_note` - Get all cards associated with a note
 - `get_review_stats` - Get review statistics for a deck or overall
@@ -78,7 +81,8 @@ Once installed, the MCP server runs automatically when Anki is open. You can the
 - `create_deck` - Create a new deck
 - `create_note_type` - Create a new note type (card template)
 - `create_note` - Create a new note in a deck
-- `update_note` - Update an existing note's fields or tags
+- `update_note` - Update an existing note's fields or tags. Returns a minimal confirmation by default; pass `return_fields` (e.g. `["Front"]`, or `["*"]` for all) to read fields back, with optional `strip_html` for plain-text values.
+- `update_notes` - Batch version of `update_note`: one call applies a list of `{note_id, fields?, tags?}` updates, with per-note failures reported without aborting the batch.
 - `update_deck` - Update a deck's name or description
 - `delete_note` - Delete a note and all its cards
 - `delete_deck` - Delete a deck and all its cards
