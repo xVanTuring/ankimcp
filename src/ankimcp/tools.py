@@ -250,7 +250,9 @@ AVAILABLE_TOOLS = [
         name="update_note",
         description=(
             "Update an existing note. Returns a minimal confirmation by default; "
-            "use return_fields to read back specific fields after the update."
+            "use return_fields to read back specific fields after the update. "
+            "Field names must match the note type exactly (case and whitespace "
+            "sensitive); unknown field names raise an error."
         ),
         inputSchema={
             "type": "object",

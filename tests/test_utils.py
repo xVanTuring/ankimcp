@@ -352,8 +352,17 @@ class MockAnkiInterface(AnkiInterface):
         # Update fields
         updated_fields = []
         if fields:
+            model = self.models.get(note["model_name"])
+            valid_names = [f["name"] for f in model["flds"]] if model else []
+            unknown = [name for name in fields if name not in valid_names]
+            if unknown:
+                raise ValueError(
+                    f"Unknown field(s) for note type "
+                    f"'{note['model_name']}': {unknown}. "
+                    f"Valid fields: {valid_names}"
+                )
             note["fields"].update(fields)
-            updated_fields = list(fields.keys())
+            updated_fields = [name for name in valid_names if name in fields]
 
         # Update tags
         if tags is not None:

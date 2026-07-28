@@ -8,13 +8,14 @@ The SSE transport is the standard MCP HTTP transport that LLM clients expect.
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import queue
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Lock, Thread
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .anki_interface import AnkiInterface
 from .tools import AVAILABLE_TOOLS, ToolExecutor
@@ -84,6 +85,36 @@ class SSESessionManager:
 
 # Global session manager
 sse_sessions = SSESessionManager()
+
+
+def _run_on_main_thread(func: Callable[[], Any]) -> Any:
+    """Run func on Anki's main thread when running inside Anki.
+
+    Anki's collection is not thread-safe — all access must happen on the
+    main thread. The HTTP server handles requests on worker threads, so
+    collection work is dispatched via mw.taskman.run_on_main and the
+    worker blocks until the result (or exception) comes back.
+
+    Outside Anki (standalone/tests, where aqt is unavailable) func runs
+    inline on the current thread.
+    """
+    try:
+        from aqt import mw  # type: ignore
+    except ImportError:
+        return func()
+    if mw is None or mw.col is None:
+        return func()
+
+    future: concurrent.futures.Future = concurrent.futures.Future()
+
+    def wrapper() -> None:
+        try:
+            future.set_result(func())
+        except BaseException as exc:
+            future.set_exception(exc)
+
+    mw.taskman.run_on_main(wrapper)
+    return future.result()
 
 
 class JSONRPCHandler:
@@ -541,7 +572,9 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             raise JSONRPCError(INTERNAL_ERROR, "Anki interface not initialized")
 
         executor = ToolExecutor(anki)
-        results = asyncio.run(executor.execute(tool_name, arguments))
+        results = _run_on_main_thread(
+            lambda: asyncio.run(executor.execute(tool_name, arguments))
+        )
 
         content = [{"type": "text", "text": r.text} for r in results]
         is_error = any(r.is_error for r in results)

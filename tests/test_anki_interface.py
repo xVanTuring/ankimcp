@@ -321,6 +321,35 @@ async def test_update_notes(mock_anki):
 
 
 @pytest.mark.asyncio
+async def test_update_note_rejects_unknown_fields(mock_anki):
+    """Unknown field names raise instead of being silently skipped."""
+    with pytest.raises(ValueError, match="Unknown field"):
+        await mock_anki.update_note(1, fields={"front": "typo in name"})
+
+    with pytest.raises(ValueError, match="Unknown field"):
+        await mock_anki.update_note(1, fields={"Front ": "trailing space"})
+
+    # A mix of valid and unknown fields also fails, and nothing is written
+    with pytest.raises(ValueError, match="Unknown field"):
+        await mock_anki.update_note(1, fields={"Front": "Hi", "Nope": "not a field"})
+    note = await mock_anki.get_note(1)
+    assert note["fields"]["Front"] == "Hello"
+
+    # In a batch, the bad item is reported as failed instead of success
+    result = await mock_anki.update_notes(
+        [
+            {"note_id": 1, "fields": {"Front": "Batch"}},
+            {"note_id": 1, "fields": {"Nope": "not a field"}},
+        ]
+    )
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    assert result["results"][0]["success"] is True
+    assert result["results"][1]["success"] is False
+    assert "Unknown field" in result["results"][1]["error"]
+
+
+@pytest.mark.asyncio
 async def test_search_card_states_by_note(mock_anki):
     """by_note merges cards that share a note into one entry."""
     mock_anki.cards[2] = dict(mock_anki.cards[1], cid=2, ivl=5)

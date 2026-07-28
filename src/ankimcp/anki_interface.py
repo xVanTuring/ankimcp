@@ -491,6 +491,10 @@ class AnkiInterface:
         Returns a minimal confirmation by default; pass return_fields to read
         back specific fields after the update (["*"] returns all fields).
         Returned field values are raw (with HTML) unless strip_html is set.
+
+        Raises ValueError if any key in `fields` is not a field of the note's
+        note type — field names must match exactly (case and whitespace
+        sensitive), otherwise the update would be silently dropped.
         """
         note = self.col.get_note(NoteId(note_id))
 
@@ -506,8 +510,15 @@ class AnkiInterface:
         if fields:
             model = note.note_type()
             if model:
-                for field in model["flds"]:
-                    field_name = field["name"]
+                valid_names = [field["name"] for field in model["flds"]]
+                unknown = [name for name in fields if name not in valid_names]
+                if unknown:
+                    raise ValueError(
+                        f"Unknown field(s) for note type "
+                        f"'{model['name']}': {unknown}. "
+                        f"Valid fields: {valid_names}"
+                    )
+                for field_name in valid_names:
                     if field_name in fields:
                         note[field_name] = fields[field_name]
                         updated_fields.append(field_name)
