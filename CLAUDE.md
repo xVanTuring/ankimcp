@@ -131,9 +131,9 @@ To install in Anki:
 
 ## Key Implementation Details
 
-- HTTP server with SSE transport runs on port 4473 (configurable)
-- Threaded server handles concurrent SSE connections
-- MCP clients connect directly via SSE endpoint (`/sse`)
+- HTTP server with Streamable HTTP transport runs on port 4473 (configurable)
+- Threaded server handles concurrent connections
+- MCP clients connect via the Streamable HTTP endpoint (`/mcp`)
 - Tool results are serialized with `json.dumps` (`ensure_ascii=False`), so clients can parse them directly. Error results stay as plain `Error: ...` text.
 - Gracefully handles Anki availability (addon vs standalone)
 - Configuration via Anki's addon config system

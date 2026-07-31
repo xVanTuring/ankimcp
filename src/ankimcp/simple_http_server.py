@@ -1,20 +1,21 @@
-"""MCP-compliant HTTP server for Anki using JSON-RPC 2.0 with SSE transport.
+"""MCP-compliant HTTP server for Anki using JSON-RPC 2.0 over Streamable HTTP.
 
-Supports two transport modes:
-- POST /mcp: Direct JSON-RPC requests (simple, stateless)
-- GET /sse + POST /messages: SSE transport for streaming (MCP standard)
+Transport (MCP "Streamable HTTP" spec):
+- POST /mcp: Client JSON-RPC messages. Requests get a JSON response;
+  notifications/responses get HTTP 202 with no body.
+- GET /mcp: Not supported (no standalone server-to-client stream) -> 405.
+- DELETE /mcp: Not supported (stateless, no sessions) -> 405.
 
-The SSE transport is the standard MCP HTTP transport that LLM clients expect.
+The server is stateless: no session IDs are issued, every POST /mcp is
+self-contained.
 """
 
 import asyncio
 import concurrent.futures
 import json
 import logging
-import queue
-import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Lock, Thread
+from threading import Thread
 from typing import Any, Callable, Dict, Optional
 
 from .anki_interface import AnkiInterface
@@ -40,51 +41,6 @@ INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
-
-
-class SSESessionManager:
-    """Manage SSE sessions for MCP clients."""
-
-    def __init__(self):
-        self._sessions: Dict[str, queue.Queue] = {}
-        self._lock = Lock()
-
-    def create_session(self) -> str:
-        """Create a new SSE session and return its ID."""
-        session_id = str(uuid.uuid4())
-        with self._lock:
-            self._sessions[session_id] = queue.Queue()
-        logger.info(f"SSE session created: {session_id}")
-        return session_id
-
-    def remove_session(self, session_id: str) -> None:
-        """Remove an SSE session."""
-        with self._lock:
-            if session_id in self._sessions:
-                del self._sessions[session_id]
-                logger.info(f"SSE session removed: {session_id}")
-
-    def get_queue(self, session_id: str) -> Optional[queue.Queue]:
-        """Get the message queue for a session."""
-        with self._lock:
-            return self._sessions.get(session_id)
-
-    def send_message(self, session_id: str, message: Dict[str, Any]) -> bool:
-        """Send a message to an SSE session."""
-        q = self.get_queue(session_id)
-        if q:
-            q.put(message)
-            return True
-        return False
-
-    def session_exists(self, session_id: str) -> bool:
-        """Check if a session exists."""
-        with self._lock:
-            return session_id in self._sessions
-
-
-# Global session manager
-sse_sessions = SSESessionManager()
 
 
 def _run_on_main_thread(func: Callable[[], Any]) -> Any:
@@ -174,182 +130,71 @@ class JSONRPCError(Exception):
 
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
-    """Handle HTTP requests for MCP JSON-RPC with SSE support."""
-
-    # Increase timeout for SSE connections
-    timeout = 300  # 5 minutes
+    """Handle HTTP requests for the MCP Streamable HTTP transport."""
 
     def do_GET(self):
         """Handle GET requests."""
         if self.path == "/health":
             self._send_json_response(200, {"status": "ok", "service": "ankimcp"})
-        elif self.path == "/sse":
-            self._handle_sse()
+        elif self.path == "/mcp":
+            # Standalone server-to-client SSE streams are not offered.
+            self._send_method_not_allowed()
+        else:
+            self.send_error(404, "Not Found")
+
+    def do_DELETE(self):
+        """Handle DELETE requests (session termination)."""
+        if self.path == "/mcp":
+            # The server is stateless and issues no session IDs.
+            self._send_method_not_allowed()
         else:
             self.send_error(404, "Not Found")
 
     def do_POST(self):
-        """Handle POST requests - MCP JSON-RPC endpoint."""
+        """Handle POST requests - MCP Streamable HTTP endpoint."""
         if self.path == "/mcp":
             self._handle_mcp_post()
-        elif self.path.startswith("/messages"):
-            self._handle_messages_post()
         else:
             self.send_error(404, "Not Found")
 
-    def _handle_sse(self):
-        """Handle SSE connection for MCP transport."""
-        # Create a new session
-        session_id = sse_sessions.create_session()
+    def _handle_mcp_post(self):
+        """Handle a POST to /mcp (Streamable HTTP transport).
 
-        try:
-            # Send SSE headers
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-
-            # Send the endpoint event telling client where to POST messages
-            endpoint_event = (
-                f"event: endpoint\ndata: /messages?session_id={session_id}\n\n"
-            )
-            self.wfile.write(endpoint_event.encode("utf-8"))
-            self.wfile.flush()
-
-            logger.info(f"SSE client connected, session: {session_id}")
-
-            # Keep connection open and send messages from queue
-            msg_queue = sse_sessions.get_queue(session_id)
-            while msg_queue is not None:
-                try:
-                    # Wait for messages with timeout to check if connection is alive
-                    message = msg_queue.get(timeout=30)
-
-                    # Send the message as SSE event
-                    data = json.dumps(message)
-                    sse_event = f"event: message\ndata: {data}\n\n"
-                    self.wfile.write(sse_event.encode("utf-8"))
-                    self.wfile.flush()
-
-                except queue.Empty:
-                    # Send keep-alive comment
-                    try:
-                        self.wfile.write(b": keepalive\n\n")
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        break
-                except (BrokenPipeError, ConnectionResetError):
-                    break
-
-                # Check if session still exists
-                msg_queue = sse_sessions.get_queue(session_id)
-
-        except Exception as e:
-            logger.error(f"SSE error: {e}")
-        finally:
-            sse_sessions.remove_session(session_id)
-            logger.info(f"SSE client disconnected, session: {session_id}")
-
-    def _handle_messages_post(self):
-        """Handle POST messages from SSE clients."""
-        # Extract session_id from query string
-        session_id = None
-        if "?" in self.path:
-            query = self.path.split("?", 1)[1]
-            for param in query.split("&"):
-                if param.startswith("session_id="):
-                    session_id = param.split("=", 1)[1]
-                    break
-
-        if not session_id or not sse_sessions.session_exists(session_id):
-            self._send_json_response(
-                400,
-                JSONRPCHandler.error_response(
-                    None, INVALID_REQUEST, "Invalid or missing session_id"
-                ),
-            )
-            return
-
-        # Read and process the message
+        - Requests (with an "id") get a 200 JSON response.
+        - Notifications/responses (no "id") get 202 Accepted with no body.
+        - Invalid JSON or invalid JSON-RPC gets a 400 error response.
+        """
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode("utf-8")
 
-        request_id = None
         try:
             request = JSONRPCHandler.parse_request(body)
-            request_id = request.get("id")
-            method = request["method"]
-            params = request.get("params", {})
-
-            # Process the request
-            result = self._handle_method(method, params)
-
-            # Send response via SSE
-            response = JSONRPCHandler.success_response(request_id, result)
-            sse_sessions.send_message(session_id, response)
-
-            # Also send HTTP 202 Accepted
-            try:
-                self.send_response(202)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"status": "accepted"}')
-            except BrokenPipeError:
-                # Client disconnected before we could send response
-                pass
-
         except JSONRPCError as e:
             response = JSONRPCHandler.error_response(
-                request_id, e.code, e.message, e.data
+                None, e.code, e.message, e.data
             )
-            sse_sessions.send_message(session_id, response)
-            try:
-                self.send_response(202)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"status": "accepted"}')
-            except BrokenPipeError:
-                pass
-        except BrokenPipeError:
-            # Client closed connection - just log at debug level
-            logger.debug("Client disconnected during message handling")
-        except Exception as e:
-            logger.error(f"Error handling message: {e}")
-            response = JSONRPCHandler.error_response(
-                request_id, INTERNAL_ERROR, f"Internal error: {str(e)}"
-            )
-            sse_sessions.send_message(session_id, response)
-            try:
-                self.send_response(202)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"status": "accepted"}')
-            except BrokenPipeError:
-                logger.debug("Client disconnected while sending error response")
+            self._send_json_response(400, response)
+            return
 
-    def _handle_mcp_post(self):
-        """Handle direct POST to /mcp (stateless JSON-RPC)."""
-        # Read request body
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8")
+        request_id = request.get("id")
+        method = request["method"]
+        params = request.get("params", {})
 
-        request_id = None
+        # Notifications and responses carry no id: accept and move on.
+        if "id" not in request:
+            try:
+                self._handle_method(method, params)
+            except JSONRPCError as e:
+                logger.warning(f"Error handling notification {method}: {e.message}")
+            except Exception as e:
+                logger.error(f"Error handling notification {method}: {e}")
+            self._send_accepted()
+            return
+
         try:
-            # Parse JSON-RPC request
-            request = JSONRPCHandler.parse_request(body)
-            request_id = request.get("id")
-            method = request["method"]
-            params = request.get("params", {})
-
-            # Route to appropriate handler
             result = self._handle_method(method, params)
-
-            # Send success response
             response = JSONRPCHandler.success_response(request_id, result)
             self._send_json_response(200, response)
-
         except JSONRPCError as e:
             response = JSONRPCHandler.error_response(
                 request_id, e.code, e.message, e.data
@@ -591,13 +436,33 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
+    def _send_accepted(self) -> None:
+        """Send HTTP 202 Accepted with no body (for notifications/responses)."""
+        self.send_response(202)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _send_method_not_allowed(self) -> None:
+        """Send HTTP 405 for unsupported methods on /mcp."""
+        self.send_response(405)
+        self.send_header("Allow", "POST")
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(
+            json.dumps(
+                JSONRPCHandler.error_response(
+                    None, INVALID_REQUEST, "Method not allowed; use POST"
+                )
+            ).encode("utf-8")
+        )
+
     def log_message(self, format: str, *args) -> None:
         """Override to use logger instead of stderr."""
         logger.debug(f"{self.address_string()} - {format % args}")
 
 
 class ThreadedHTTPServer(HTTPServer):
-    """HTTPServer that handles each request in a new thread (for SSE support)."""
+    """HTTPServer that handles each request in a new thread."""
 
     daemon_threads = True
     allow_reuse_address = True
@@ -624,7 +489,7 @@ class ThreadedHTTPServer(HTTPServer):
 
 
 class SimpleHTTPServer:
-    """MCP-compliant HTTP server for AnkiMCP with SSE support."""
+    """MCP-compliant HTTP server for AnkiMCP (Streamable HTTP transport)."""
 
     def __init__(self, anki: AnkiInterface, host: str = "localhost", port: int = 4473):
         self.anki = anki
@@ -644,9 +509,7 @@ class SimpleHTTPServer:
 
         base_url = f"http://{self.host}:{self.port}"
         logger.info("AnkiMCP server started:")
-        logger.info(f"  SSE endpoint: {base_url}/sse")
-        logger.info(f"  Messages endpoint: {base_url}/messages")
-        logger.info(f"  Direct JSON-RPC: {base_url}/mcp")
+        logger.info(f"  MCP endpoint (Streamable HTTP): {base_url}/mcp")
         logger.info(f"  Health check: {base_url}/health")
 
     def stop(self) -> None:

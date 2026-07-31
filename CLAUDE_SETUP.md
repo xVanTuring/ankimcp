@@ -1,6 +1,6 @@
 # Setting up AnkiMCP with Claude Code
 
-AnkiMCP is an Anki addon that exposes your Anki data via the Model Context Protocol (MCP). When Anki is running, it provides an HTTP server with SSE transport that MCP clients can connect to directly.
+AnkiMCP is an Anki addon that exposes your Anki data via the Model Context Protocol (MCP). When Anki is running, it provides an HTTP server using the MCP Streamable HTTP transport that MCP clients can connect to directly.
 
 ## Step 1: Install the Anki addon
 
@@ -14,7 +14,7 @@ AnkiMCP is an Anki addon that exposes your Anki data via the Model Context Proto
 
 ## Step 2: Configure your MCP client
 
-AnkiMCP exposes an SSE endpoint that MCP clients can connect to directly.
+AnkiMCP exposes a Streamable HTTP endpoint that MCP clients can connect to directly.
 
 ### For Claude Desktop
 
@@ -27,7 +27,8 @@ Edit `claude_desktop_config.json`:
 {
   "mcpServers": {
     "ankimcp": {
-      "url": "http://localhost:4473/sse"
+      "type": "http",
+      "url": "http://localhost:4473/mcp"
     }
   }
 }
@@ -35,7 +36,7 @@ Edit `claude_desktop_config.json`:
 
 ### For other MCP clients
 
-Point the client to the SSE endpoint: `http://localhost:4473/sse`
+Point the client to the MCP endpoint: `http://localhost:4473/mcp`
 
 ## Step 3: Restart your MCP client
 
@@ -49,9 +50,7 @@ When Anki is running:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/sse` | GET | SSE transport (MCP standard) |
-| `/messages?session_id=X` | POST | Send messages to SSE session |
-| `/mcp` | POST | Direct JSON-RPC (stateless) |
+| `/mcp` | POST | MCP Streamable HTTP endpoint (JSON-RPC 2.0) |
 | `/health` | GET | Health check |
 
 ## Testing the Connection
@@ -62,17 +61,18 @@ You can test if the server is running:
 # Health check
 curl http://localhost:4473/health
 
-# List tools via direct JSON-RPC
+# List tools via the MCP endpoint
 curl -X POST http://localhost:4473/mcp \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 ## How it works
 
 1. **Anki addon** runs an HTTP server on port 4473 when Anki is open
-2. **MCP clients** connect directly to the SSE endpoint
-3. The server speaks native MCP protocol (JSON-RPC 2.0 over SSE)
+2. **MCP clients** connect to the `/mcp` endpoint
+3. The server speaks native MCP protocol (JSON-RPC 2.0 over Streamable HTTP)
 
 ## Configuration
 
